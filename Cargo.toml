@@ -1,0 +1,15 @@
+[package]
+name = "vector_match"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+itertools = "0.13.0"
+quote = "*"
+syn   = { version = "*", features = ["full"] }
+
+[dev-dependencies]
+trybuild = "*"
+
+[lib]
+proc-macro = true
