@@ -1,9 +1,12 @@
 #![allow(warnings)]
 
 use itertools::Itertools as _;
-use proc_macro::TokenStream;
 use quote::quote;
+use quote::ToTokens;
+use quote::TokenStreamExt;
 use syn::{parse_macro_input, Expr, ExprMatch, Pat, PatSlice, PatIdent, Ident};
+use proc_macro2;
+use proc_macro2::TokenStream;
 
 enum Rule {
     Lit(Pat),
@@ -22,66 +25,104 @@ enum Rule {
 //  .tuple_windows()
 //  .collect_vec();
 
-// enum MatchType {
-//     Lit(u32),
-//     Range(Option<u32>),
-// }
-//
-// struct Find {
-//     index:   usize,
-//     matches: Vec<MatchType>,
-// }
-//
-// impl Find {
-//     fn new(matches: Vec<MatchType>) -> Self {
-//         Find { index: 0, matches: matches.into_iter().rev().collect_vec() }
-//     }
-// }
-//
-// let mut v  = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-// let mut m1 = Find::new(vec![MatchType::Lit(0), MatchType::Lit(1), MatchType::Lit(9)]);          // false
-// let mut m2 = Find::new(vec![MatchType::Lit(0), MatchType::Range(Some(9)), MatchType::Lit(10)]); // false
-// let mut m4 = Find::new(vec![MatchType::Range(Some(2)), MatchType::Lit(3)]);                     // true
-// let mut m3 = Find::new(vec![MatchType::Range(Some(10)), MatchType::Lit(11)]);                   // false
-// let mut m5 = Find::new(vec![]);                                                                 // true
-// let mut ms = vec![m1, m2, m3, m4, m5];
-// for item in v.iter() {
-// }
+// a     = Value(a)
+// _     = Splat((0, Some(1)), None)
+// ..    = Splat((0, None), None)
+// 2..   = Splat((2, None), None)
+// 2..3  = Splat((2, 3), None)
+// .., a = Splat((0, None), Some(a))
+// a | b = Values([a, b])
+
+enum Pattern {
+    Value(TokenStream),
+    Values(Vec<TokenStream>),
+    Splat((Option<usize>, Option<usize>), Option<TokenStream>),
+}
+
+fn generate_patterns(mut tokens: impl Iterator<Item = Pat>) -> Vec<Pattern> {
+    let mut patterns = vec![];
+    let Some(elem) = tokens.next() else {
+        return vec![]
+    };
+
+    match elem {
+        Pat::Lit(pat) => {
+            patterns.push(Pattern::Value(pat.clone().to_token_stream()));
+        },
+        Pat::Range(pat) => {
+            match (&pat.start, &pat.end) {
+                (None, None) => {
+                }
+                (None, Some(e)) => todo!(),
+                (Some(s), None) => todo!(),
+                (Some(s), Some(e)) => todo!(),
+            };
+        }
+        Pat::Const(_) => todo!(),
+        Pat::Ident(_) => todo!(),
+        Pat::Macro(_) => todo!(),
+        Pat::Or(_) => todo!(),
+        Pat::Paren(_) => todo!(),
+        Pat::Path(_) => todo!(),
+        Pat::Reference(_) => todo!(),
+        Pat::Rest(_) => todo!(),
+        Pat::Slice(_) => todo!(),
+        Pat::Struct(_) => todo!(),
+        Pat::Tuple(_) => todo!(),
+        Pat::TupleStruct(_) => todo!(),
+        Pat::Type(_) => todo!(),
+        Pat::Verbatim(_) => todo!(),
+        Pat::Wild(_) => todo!(),
+        _ => todo!(),
+    }
+
+    patterns
+}
 
 #[proc_macro]
-pub fn generate_match(input: TokenStream) -> TokenStream {
+pub fn generate_match(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input_expr = parse_macro_input!(input as Expr);
 
     let Expr::Match(ExprMatch { expr, arms, .. }) = input_expr else {
         return syn::Error::new_spanned(input_expr, "Expected a match statement").to_compile_error().into()
     };
 
-    let arms = arms
-        .into_iter()
-        .map(|arm| {
-            if let Pat::Slice(PatSlice { elems, .. }) = &arm.pat {
-                elems
-                    .iter()
-                    .tuple_windows()
-                    .enumerate()
-                    .map(|(i, (elem1, elem2))| {
-                        match (elem1, elem2) {
-                            (Pat::Range(range), Pat::Lit(lit)) => todo!(),
-                            _ => todo!(),
-                        }
-                    });
-
-                let body = &arm.body;
-                quote! { data if true => #body }
-            } else {
-                quote! { #arm }
+    for arm in arms.iter() {
+        match &arm.pat {
+            Pat::Slice(PatSlice { elems, .. }) => {
+                for (i, elem) in elems.iter().enumerate() {
+                }
             }
-        })
-        .collect_vec();
+            _ => todo!(),
+        }
+    }
+
+    // let arms = arms
+    //     .into_iter()
+    //     .map(|arm| {
+    //         if let Pat::Slice(PatSlice { elems, .. }) = &arm.pat {
+    //             elems
+    //                 .iter()
+    //                 .tuple_windows()
+    //                 .enumerate()
+    //                 .map(|(i, (elem1, elem2))| {
+    //                     match (elem1, elem2) {
+    //                         (Pat::Range(range), Pat::Lit(lit)) => todo!(),
+    //                         _ => todo!(),
+    //                     }
+    //                 });
+    //
+    //             let body = &arm.body;
+    //             quote! { data if true => #body }
+    //         } else {
+    //             quote! { #arm }
+    //         }
+    //     })
+    //     .collect_vec();
 
     quote! {
         match #expr {
-            #(#arms)*
+            //#(#arms)*
         }
     }.into()
 

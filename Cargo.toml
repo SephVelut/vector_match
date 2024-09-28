@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 itertools = "0.13.0"
+proc-macro2 = "1.0.86"
 quote = "*"
 syn   = { version = "*", features = ["full"] }
 
