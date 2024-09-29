@@ -1,5 +1,7 @@
 #![allow(warnings)]
 
+use std::collections::VecDeque;
+
 use itertools::Itertools as _;
 use quote::quote;
 use quote::ToTokens;
@@ -7,6 +9,7 @@ use quote::TokenStreamExt;
 use syn::{parse_macro_input, Expr, ExprMatch, Pat, PatSlice, PatIdent, Ident};
 use proc_macro2;
 use proc_macro2::TokenStream;
+use syn::spanned::Spanned;
 
 enum Rule {
     Lit(Pat),
@@ -33,50 +36,72 @@ enum Rule {
 // .., a = Splat((0, None), Some(a))
 // a | b = Values([a, b])
 
+enum SplatTerm {
+    Value(TokenStream),
+    Values(Vec<TokenStream>),
+}
+
 enum Pattern {
     Value(TokenStream),
     Values(Vec<TokenStream>),
-    Splat((Option<usize>, Option<usize>), Option<TokenStream>),
+    Splat((Option<usize>, Option<usize>), Option<SplatTerm>),
 }
 
-fn generate_patterns(mut tokens: impl Iterator<Item = Pat>) -> Vec<Pattern> {
-    let mut patterns = vec![];
-    let Some(elem) = tokens.next() else {
-        return vec![]
+fn parse_number(expr: &Expr) -> Result<usize, syn::Error> {
+    expr
+        .to_token_stream()
+        .to_string()
+        .parse()
+        .map_err(|err| {
+            syn::Error::new(expr.span(), format!("expected number but got: {:?}", err))
+        })
+}
+
+fn generate_patterns(mut pats: impl Iterator<Item = Pat>) -> Result<Vec<Pattern>, syn::Error> {
+    let Some(elem) = pats.next() else {
+        return Ok(vec![])
     };
 
+    let mut patterns = generate_patterns(pats)?;
     match elem {
-        Pat::Lit(pat) => {
-            patterns.push(Pattern::Value(pat.clone().to_token_stream()));
-        },
+        Pat::Lit(pat) => patterns.push(Pattern::Value(pat.clone().to_token_stream())),
         Pat::Range(pat) => {
-            match (&pat.start, &pat.end) {
-                (None, None) => {
-                }
-                (None, Some(e)) => todo!(),
-                (Some(s), None) => todo!(),
-                (Some(s), Some(e)) => todo!(),
+            let vals = match patterns.pop() {
+                Some(Pattern::Value(tokens))  => Some(SplatTerm::Value(tokens)),
+                Some(Pattern::Values(tokens)) => Some(SplatTerm::Values(tokens)),
+                Some(pattern) => {
+                    patterns.push(pattern);
+                    None
+                },
+                None => None,
             };
+
+            match (&pat.start, &pat.end) {
+                (None, None) => patterns.push(Pattern::Splat((None, None), vals)),
+                (None, Some(max)) =>patterns.push(Pattern::Splat((None, Some(parse_number(max)?)), vals)),
+                (Some(min), None) => patterns.push(Pattern::Splat((Some(parse_number(min)?), None), vals)),
+                (Some(min), Some(max)) => patterns.push(Pattern::Splat((Some(parse_number(min)?), Some(parse_number(max)?)), vals)),
+            }
         }
-        Pat::Const(_) => todo!(),
-        Pat::Ident(_) => todo!(),
-        Pat::Macro(_) => todo!(),
-        Pat::Or(_) => todo!(),
-        Pat::Paren(_) => todo!(),
-        Pat::Path(_) => todo!(),
-        Pat::Reference(_) => todo!(),
-        Pat::Rest(_) => todo!(),
-        Pat::Slice(_) => todo!(),
-        Pat::Struct(_) => todo!(),
-        Pat::Tuple(_) => todo!(),
+        Pat::Rest(pat)      => todo!(),
+        Pat::Const(_)       => todo!(),
+        Pat::Ident(_)       => todo!(),
+        Pat::Macro(_)       => todo!(),
+        Pat::Or(_)          => todo!(),
+        Pat::Paren(_)       => todo!(),
+        Pat::Path(_)        => todo!(),
+        Pat::Reference(_)   => todo!(),
+        Pat::Slice(_)       => todo!(),
+        Pat::Struct(_)      => todo!(),
+        Pat::Tuple(_)       => todo!(),
         Pat::TupleStruct(_) => todo!(),
-        Pat::Type(_) => todo!(),
-        Pat::Verbatim(_) => todo!(),
-        Pat::Wild(_) => todo!(),
+        Pat::Type(_)        => todo!(),
+        Pat::Verbatim(_)    => todo!(),
+        Pat::Wild(_)        => todo!(),
         _ => todo!(),
     }
 
-    patterns
+    Ok(patterns)
 }
 
 #[proc_macro]
@@ -90,7 +115,41 @@ pub fn generate_match(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     for arm in arms.iter() {
         match &arm.pat {
             Pat::Slice(PatSlice { elems, .. }) => {
-                for (i, elem) in elems.iter().enumerate() {
+                let mut patterns = vec![];
+                let mut i = 0;
+                while i < elems.len() {
+                    match &elems[i] {
+                        Pat::Lit(pat) => {
+                            patterns.push(Pattern::Value(pat.clone().to_token_stream()));
+                        },
+                        Pat::Range(pat) => {
+                            let range = match (&pat.start, &pat.end) {
+                                (None, None) => {
+                                }
+                                (None, Some(e)) => todo!(),
+                                (Some(s), None) => todo!(),
+                                (Some(s), Some(e)) => todo!(),
+                            };
+                        }
+                        Pat::Const(_) => todo!(),
+                        Pat::Ident(_) => todo!(),
+                        Pat::Macro(_) => todo!(),
+                        Pat::Or(_) => todo!(),
+                        Pat::Paren(_) => todo!(),
+                        Pat::Path(_) => todo!(),
+                        Pat::Reference(_) => todo!(),
+                        Pat::Rest(_) => todo!(),
+                        Pat::Slice(_) => todo!(),
+                        Pat::Struct(_) => todo!(),
+                        Pat::Tuple(_) => todo!(),
+                        Pat::TupleStruct(_) => todo!(),
+                        Pat::Type(_) => todo!(),
+                        Pat::Verbatim(_) => todo!(),
+                        Pat::Wild(_) => todo!(),
+                        _ => todo!(),
+                    }
+
+                    i += 1;
                 }
             }
             _ => todo!(),
