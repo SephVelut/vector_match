@@ -36,11 +36,13 @@ enum Rule {
 // .., a = Splat((0, None), Some(a))
 // a | b = Values([a, b])
 
+#[derive(Debug)]
 enum SplatTerm {
     Value(TokenStream),
     Values(Vec<TokenStream>),
 }
 
+#[derive(Debug)]
 enum Pattern {
     Value(TokenStream),
     Values(Vec<TokenStream>),
@@ -57,7 +59,7 @@ fn parse_number(expr: &Expr) -> Result<usize, syn::Error> {
         })
 }
 
-fn generate_patterns(mut pats: impl Iterator<Item = Pat>) -> Result<Vec<Pattern>, syn::Error> {
+fn generate_patterns<'a>(mut pats: impl Iterator<Item = &'a Pat>) -> Result<Vec<Pattern>, syn::Error> {
     let Some(elem) = pats.next() else {
         return Ok(vec![])
     };
@@ -66,7 +68,7 @@ fn generate_patterns(mut pats: impl Iterator<Item = Pat>) -> Result<Vec<Pattern>
     match elem {
         Pat::Lit(pat) => patterns.push(Pattern::Value(pat.clone().to_token_stream())),
         Pat::Range(pat) => {
-            let vals = match patterns.pop() {
+            let term = match patterns.pop() {
                 Some(Pattern::Value(tokens))  => Some(SplatTerm::Value(tokens)),
                 Some(Pattern::Values(tokens)) => Some(SplatTerm::Values(tokens)),
                 Some(pattern) => {
@@ -77,31 +79,33 @@ fn generate_patterns(mut pats: impl Iterator<Item = Pat>) -> Result<Vec<Pattern>
             };
 
             match (&pat.start, &pat.end) {
-                (None, None) => patterns.push(Pattern::Splat((None, None), vals)),
-                (None, Some(max)) =>patterns.push(Pattern::Splat((None, Some(parse_number(max)?)), vals)),
-                (Some(min), None) => patterns.push(Pattern::Splat((Some(parse_number(min)?), None), vals)),
-                (Some(min), Some(max)) => patterns.push(Pattern::Splat((Some(parse_number(min)?), Some(parse_number(max)?)), vals)),
+                (None, None)           => patterns.push(Pattern::Splat((None, None), term)),
+                (None, Some(max))      => patterns.push(Pattern::Splat((None, Some(parse_number(max)?)), term)),
+                (Some(min), None)      => patterns.push(Pattern::Splat((Some(parse_number(min)?), None), term)),
+                (Some(min), Some(max)) => patterns.push(Pattern::Splat((Some(parse_number(min)?), Some(parse_number(max)?)), term)),
             }
         }
-        Pat::Rest(pat)      => todo!(),
-        Pat::Const(_)       => todo!(),
-        Pat::Ident(_)       => todo!(),
-        Pat::Macro(_)       => todo!(),
-        Pat::Or(_)          => todo!(),
-        Pat::Paren(_)       => todo!(),
-        Pat::Path(_)        => todo!(),
-        Pat::Reference(_)   => todo!(),
-        Pat::Slice(_)       => todo!(),
-        Pat::Struct(_)      => todo!(),
-        Pat::Tuple(_)       => todo!(),
-        Pat::TupleStruct(_) => todo!(),
-        Pat::Type(_)        => todo!(),
-        Pat::Verbatim(_)    => todo!(),
-        Pat::Wild(_)        => todo!(),
-        _ => todo!(),
+        Pat::Rest(_) => patterns.push(Pattern::Splat((None, None), None)),
+        _ => (),
     }
 
     Ok(patterns)
+}
+
+fn generate_match_type(pattern: Pattern, n: usize) -> TokenStream {
+    match pattern {
+        Pattern::Value(tokens) => quote! { MatchType::Value(#tokens) },
+        Pattern::Values(tokens) => {
+            let mut tokens = tokens.clone();
+            let tokens     = (0..n)
+                .into_iter()
+                .map(|_| quote! {tokens.pop() })
+                .collect_vec();
+
+            quote! { MatchType::Values([#(#tokens),*]) }
+        },
+        Pattern::Splat((min, max), tokens) => quote! {  },
+    }
 }
 
 #[proc_macro]
@@ -109,80 +113,201 @@ pub fn generate_match(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     let input_expr = parse_macro_input!(input as Expr);
 
     let Expr::Match(ExprMatch { expr, arms, .. }) = input_expr else {
-        return syn::Error::new_spanned(input_expr, "Expected a match statement").to_compile_error().into()
+        return syn::Error::new_spanned(input_expr, "Expected a match statement").to_compile_error().into();
     };
 
-    for arm in arms.iter() {
-        match &arm.pat {
-            Pat::Slice(PatSlice { elems, .. }) => {
-                let mut patterns = vec![];
+    let typ = if let Expr::Path(expr_path) = &*expr {
+        let var_type = expr_path.path.get_ident();
+        if var_type.unwrap() == "Vec" {
+            let syn::PathArguments::AngleBracketed(args) = &expr_path.path.segments.last().unwrap().arguments else {
+                unreachable!()
+            };
+
+            let Some(syn::GenericArgument::Type(syn::Type::Path(syn::TypePath { path, .. }))) = args.args.first() else {
+                unreachable!()
+            };
+
+            quote! { #path }
+        } else { unreachable!() }
+    } else { unreachable!() };
+
+    let (slice_pats, other_pats): (Vec<_>, Vec<_>) = arms
+        .iter()
+        .partition_map(|arm| {
+            match &arm.pat {
+                Pat::Slice(pat) => itertools::Either::Left(pat),
+                pat             => itertools::Either::Right(pat),
+            }
+        });
+
+    // #[derive(Debug)]
+    // enum MatchState {
+    //     Unmatched,
+    //     Matched,
+    // }
+    //
+    // #[derive(Debug)]
+    // enum MatchType<const N: usize, T> {
+    //     Value(T),
+    //     Values([T; N]),
+    //     Splat((usize, Option<usize>), Option<T>),
+    // }
+    //
+    // #[derive(Debug)]
+    // struct Find<const N: usize, const N2: usize, T> {
+    //     matches: [Option<MatchType<N2, T>>; N],
+    //     checked: bool,
+    // }
+    //
+    // impl<const N: usize, const N2: usize, T> Find<N, N2, T> {
+    //     fn new(matches: [Option<MatchType<N2, T>>; N]) -> Self {
+    //         Find { matches, checked: false }
+    //     }
+    //
+    //     fn front(&mut self) -> Option<&mut MatchType<N2, T>> {
+    //         let mut found = None;
+    //         let len = self.matches.len();
+    //         let mut i = 0;
+    //         while i < len {
+    //             if self.matches[i].is_some() {
+    //                 found = Some(i);
+    //                 break;
+    //             }
+    //
+    //             i += 1;
+    //         }
+    //
+    //         if let Some(i) = found {
+    //             self.matches[i].as_mut()
+    //         } else {
+    //             None
+    //         }
+    //     }
+    //
+    //     fn remove_front(&mut self) {
+    //         let mut i = 0;
+    //         while i < self.matches.len() {
+    //             if self.matches[i].is_some() {
+    //                 self.matches[i] = None;
+    //                 return;
+    //             }
+    //
+    //             i += 1;
+    //         }
+    //     }
+    //
+    //     fn is_empty(&self) -> bool {
+    //         self.matches
+    //             .iter()
+    //             .filter(|&item| item.is_some())
+    //             .count() == 0
+    //     }
+    // }
+
+    // let mut f0 = Find::new([Some(MatchType::Splat((2, None), Some(2))), Some(MatchType::Value(3)), None]);                       // true  | true
+    // let mut f1 = Find::new([Some(MatchType::Value(0)), Some(MatchType::Value(1)), Some(MatchType::Value(9))]);                   // false | false
+    // let mut f2 = Find::new([Some(MatchType::Value(0)), Some(MatchType::Splat((0, None), Some(9))), Some(MatchType::Value(10))]); // false | false
+    // let mut f3 = Find::new([Some(MatchType::Splat((0, None), Some(2))), Some(MatchType::Value(3)), None]);                       // true  | false
+    // let mut f4 = Find::new([Some(MatchType::Splat((0, None), Some(10))), Some(MatchType::Value(11)), None]);                     // false | false
+    // let mut f5 = Find::new([Some(MatchType::Splat((0, None), None)), None, None]);                                               // true  | true
+    // let mut f6 = Find::new([None, None, None]);                                                                                  // true  | true
+    // let mut fs: [Find<3, 2>; 7] = [f0, f1, f2, f3, f4, f5, f6];
+
+    let x_patterns = match slice_pats
+        .iter()
+        .map(|&pat| generate_patterns(pat.elems.iter()))
+        .process_results(|patterns_iter| patterns_iter.collect_vec()) {
+            Ok(patterns) => patterns,
+            Err(err) => return err.to_compile_error().into(),
+        };
+
+    let Some(matchtype_arr_len) = x_patterns.iter().map(|patterns| patterns.len()).max() else {
+        return syn::Error::new(proc_macro2::Span::call_site(), "Expected at least one pattern").to_compile_error().into();
+    };
+
+    let values_arr_len = x_patterns.iter().map(|patterns| patterns.iter().map(|pattern| if let Pattern::Values(values) = pattern { values.len() } else { 0 }).max().unwrap_or(0)).max().unwrap_or(0);
+
+    assert!(matchtype_arr_len > 0);
+
+    let matches = x_patterns
+        .into_iter()
+        .map(|patterns| patterns.into_iter().map(|pattern| generate_match_type(pattern, values_arr_len)))
+        .map(|mut pattern| {
+            (0..matchtype_arr_len)
+                .into_iter()
+                .map(|_| pattern.next().map_or(quote! { None }, |pattern| quote! { Some(#pattern) }))
+                .collect_vec()
+        })
+        .map(|matches| {
+            // let var_ident = Ident::new(&format!("v{}", i), proc_macro2::Span::call_site());
+            // quote! { let mut #var_ident = Find::<#matchtype_arr_len, #values_arr_len, _>::new([#(#matches),*]); }
+            quote! { Find::<#matchtype_arr_len, #values_arr_len, _>::new([#(#matches),*]) }
+        })
+        .collect_vec();
+
+    quote! {
+        enum MatchState {
+            Unmatched,
+            Matched,
+        }
+
+        enum MatchType<const N: usize, T> {
+            Value(T),
+            Values([T; N]),
+            Splat((usize, Option<usize>), Option<T>),
+        }
+
+        struct Find<const N: usize, const N2: usize, T> {
+            matches: [Option<MatchType<N2, T>>; N],
+            checked: bool,
+        }
+
+        impl<const N: usize, const N2: usize, T> Find<N, N2, T> {
+            fn new(matches: [Option<MatchType<N2, T>>; N]) -> Self {
+                Find { matches, checked: false }
+            }
+
+            fn front(&mut self) -> Option<&mut MatchType<N2, T>> {
+                let mut found = None;
+                let len = self.matches.len();
                 let mut i = 0;
-                while i < elems.len() {
-                    match &elems[i] {
-                        Pat::Lit(pat) => {
-                            patterns.push(Pattern::Value(pat.clone().to_token_stream()));
-                        },
-                        Pat::Range(pat) => {
-                            let range = match (&pat.start, &pat.end) {
-                                (None, None) => {
-                                }
-                                (None, Some(e)) => todo!(),
-                                (Some(s), None) => todo!(),
-                                (Some(s), Some(e)) => todo!(),
-                            };
-                        }
-                        Pat::Const(_) => todo!(),
-                        Pat::Ident(_) => todo!(),
-                        Pat::Macro(_) => todo!(),
-                        Pat::Or(_) => todo!(),
-                        Pat::Paren(_) => todo!(),
-                        Pat::Path(_) => todo!(),
-                        Pat::Reference(_) => todo!(),
-                        Pat::Rest(_) => todo!(),
-                        Pat::Slice(_) => todo!(),
-                        Pat::Struct(_) => todo!(),
-                        Pat::Tuple(_) => todo!(),
-                        Pat::TupleStruct(_) => todo!(),
-                        Pat::Type(_) => todo!(),
-                        Pat::Verbatim(_) => todo!(),
-                        Pat::Wild(_) => todo!(),
-                        _ => todo!(),
+                while i < len {
+                    if self.matches[i].is_some() {
+                        found = Some(i);
+                        break;
+                    }
+
+                    i += 1;
+                }
+
+                if let Some(i) = found {
+                    self.matches[i].as_mut()
+                } else {
+                    None
+                }
+            }
+
+            fn remove_front(&mut self) {
+                let mut i = 0;
+                while i < self.matches.len() {
+                    if self.matches[i].is_some() {
+                        self.matches[i] = None;
+                        return;
                     }
 
                     i += 1;
                 }
             }
-            _ => todo!(),
-        }
-    }
 
-    // let arms = arms
-    //     .into_iter()
-    //     .map(|arm| {
-    //         if let Pat::Slice(PatSlice { elems, .. }) = &arm.pat {
-    //             elems
-    //                 .iter()
-    //                 .tuple_windows()
-    //                 .enumerate()
-    //                 .map(|(i, (elem1, elem2))| {
-    //                     match (elem1, elem2) {
-    //                         (Pat::Range(range), Pat::Lit(lit)) => todo!(),
-    //                         _ => todo!(),
-    //                     }
-    //                 });
-    //
-    //             let body = &arm.body;
-    //             quote! { data if true => #body }
-    //         } else {
-    //             quote! { #arm }
-    //         }
-    //     })
-    //     .collect_vec();
-
-    quote! {
-        match #expr {
-            //#(#arms)*
+            fn is_empty(&self) -> bool {
+                self.matches
+                    .iter()
+                    .filter(|&item| item.is_some())
+                    .count() == 0
+            }
         }
+
+        let vars = [#(#matches),*];
     }.into()
 
     // let transformed_arms = arms.into_iter().map(|mut arm| {

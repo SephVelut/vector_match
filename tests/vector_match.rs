@@ -3,14 +3,11 @@
 use vector_match::generate_match; // replace `vector_match` with your crate's name
 
 fn main() {
-    let v = vec!['a', 'b', 'c', 'd'];
+    let v: Vec<u32> = vec![1, 2, 3, 4];
 
-    generate_match! {
+    generate_match! {u32,
         match v {
-            [1, 2] => {
-                println!("No match");
-            }
-            _ => {
+            [..] => {
                 println!("No match");
             }
             _ => {
